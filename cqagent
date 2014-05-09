@@ -1,0 +1,334 @@
+#!/usr/bin/python
+
+import sys
+import os
+import platform
+import httplib
+import urllib
+import base64
+import json
+import string
+import random
+
+
+# --------------------------------------------------------------------------------
+# CQAgent class.
+# --------------------------------------------------------------------------------
+class CQAgent(object):
+    def __init__(self, module):
+        self.module             = module
+        self.state              = self.module.params['state']
+        self.folder             = self.module.params['folder']
+        self.name               = self.module.params['name']
+        self.title              = self.module.params['title']
+        self.transport_uri      = self.module.params['transport_uri']
+        self.transport_user     = self.module.params['transport_user']
+        self.transport_password = self.module.params['transport_password']
+        self.retry_delay        = self.module.params['retry_delay']
+        self.template           = self.module.params['template']
+        self.resource_type      = self.module.params['resource_type']
+        self.triggers           = self.module.params['triggers']
+        self.log_level          = self.module.params['log_level']
+        self.serialization_type = self.module.params['serialization_type']
+        self.admin_user         = self.module.params['admin_user']
+        self.admin_password     = self.module.params['admin_password']
+        self.host               = self.module.params['host']
+        self.port               = self.module.params['port']
+
+        if not self.title:
+            self.title = self.name
+
+        self.changed = False
+        self.msg = []
+
+        self.get_agent_info()
+
+        self.trigger_map = {'no_status_update' : 'noStatusUpdate',
+                            'no_versioning'    : 'noVersioning',
+                            'on_distribute'    : 'triggerDistribute',
+                            'on_modification'  : 'triggerModified',
+                            'on_off_time'      : 'triggerOnOffTime',
+                            'on_receive'       : 'triggerReceive',
+                            'ignore_default'   : 'triggerSpecific',
+                            }
+        self.field_map = {}
+        for key, value in self.trigger_map.iteritems():
+            self.field_map[value] = key
+
+        if self.triggers:
+            for t in self.triggers:
+                if not t in self.trigger_map:
+                    self.module.fail_json(msg="invalid trigger '%s'" % t)
+
+    # --------------------------------------------------------------------------------
+    # Look up agent info.
+    # --------------------------------------------------------------------------------
+    def get_agent_info(self):
+        (status, output) = self.http_request('GET', '/etc/replication/%s/%s.4.json' % (self.folder, self.name))
+        if status == 200:
+            self.exists = True
+            self.info = json.loads(output)
+            self.enabled = self.info['jcr:content']['enabled']
+        else:
+            self.exists = False
+
+    # --------------------------------------------------------------------------------
+    # state='present'
+    # --------------------------------------------------------------------------------
+    def present(self):
+	if self.exists:
+            # Update existing agent
+            update_required = False
+            if self.title != self.info['jcr:content']['jcr:title']:
+                update_required = True
+                self.msg.append("title updated from '%s' to '%s'" % (self.info['jcr:content']['jcr:title'], self.title))
+            if self.retry_delay != int(self.info['jcr:content']['retryDelay']):
+                update_required = True
+                self.msg.append("retry_delay updated from '%s' to '%s'" % (self.info['jcr:content']['retryDelay'], self_retry_delay))
+            if self.serialization_type != self.info['jcr:content']['serializationType']:
+                update_required = True
+                self.msg.append("serialization_type updated from '%s' to '%s'" % ( self.info['jcr:content']['serializationType'], self.serializationType))
+            if self.template != self.info['jcr:content']['template']:
+                update_required = True
+                self.msg.append("template updated from '%s' to '%s'" % (self.info['jcr:content']['template'], self.template))
+            if self.transport_uri != self.info['jcr:content']['transportUri']:
+                update_required = True
+                self.msg.append("transport_uri updated from '%s' to '%s'" % (self.info['jcr:content']['transportUri'], self.transport_uri))
+            if self.transport_user != self.info['jcr:content']['transportUser']:
+                update_required = True
+                self.msg.append("transport_user updated from '%s' to '%s'" % (self.info['jcr:content']['transportUri'], self.transport_user))
+            if self.triggers:
+                curr_triggers = []
+                for field in self.info['jcr:content']:
+                    if field in self.field_map and self.info['jcr:content'][field] == 'true':
+                        curr_triggers.append(self.field_map[field])
+                curr_triggers.sort()
+                self.triggers.sort()
+                t1 = ','.join(curr_triggers)
+                t2 = ','.join(self.triggers)
+                if t1 != t2:
+                    update_required = True
+                    self.msg.append("triggers updated from '%s' to '%s'" % (t1, t2))
+            if update_required:
+               self.transport_password = None
+               self.define_agent()
+            self.msg.append('agent updated')
+        else:
+            # Create a new agent
+	    self.define_agent()
+            self.msg.append('agent created')
+
+    # --------------------------------------------------------------------------------
+    # state='absent'
+    # --------------------------------------------------------------------------------
+    def absent(self):
+        if self.exists:
+	    self.delete_agent()
+
+    # --------------------------------------------------------------------------------
+    # state='enabled'
+    # --------------------------------------------------------------------------------
+    def enable(self):
+        if self.exists:
+            if self.enabled == 'false':
+	        self.enable_agent()
+        else:
+            self.module.fail_json(msg="can't find agent '/etc/replication/%s/%s'" % (self.folder, self.name))
+
+    # --------------------------------------------------------------------------------
+    # state='disabled'
+    # --------------------------------------------------------------------------------
+    def disable(self):
+        if self.exists:
+            if self.enabled == 'true':
+	        self.disable_agent()
+        else:
+            self.module.fail_json(msg="can't find agent '/etc/replication/%s/%s'" % (self.folder, self.name))
+
+    # --------------------------------------------------------------------------------
+    # state='set_password'
+    # --------------------------------------------------------------------------------
+    def password(self):
+        if self.exists:
+            if not self.transport_password:
+                self.module.fail_json(msg='Missing required argument: transport_password')
+	    self.set_password()
+        else:
+            self.module.fail_json(msg="can't find agent '/etc/replication/%s/%s'" % (self.folder, self.name))
+
+    # --------------------------------------------------------------------------------
+    # Create a new agent
+    # --------------------------------------------------------------------------------
+    def define_agent(self):
+        if not self.transport_uri:
+            self.module.fail_json(msg='Missing required argument: transport_uri')
+
+        fields = [
+            ('jcr:primaryType', 'cq:Page'),
+            ('jcr:content/enabled', 'true'),
+            ('jcr:content/jcr:title', self.title),
+            ('jcr:content/sling:resourceType', self.resource_type),
+            ('jcr:content/template', self.template),
+            ('jcr:content/transportUri', self.transport_uri),
+            ('jcr:content/retryDelay', self.retry_delay),
+            ('jcr:content/serializationType', self.serialization_type),
+            ('jcr:content/logLevel', self.log_level),
+            ]
+        if self.transport_user:
+            fields.append(('jcr:content/transportUser', self.transport_user))
+        if self.transport_password:
+            fields.append(('jcr:content/transportPassword', self.transport_password))
+
+        if self.triggers:
+            trigger_setting = {}
+            for t in self.trigger_map:
+                trigger_setting[t] = 'false'
+            for t in self.triggers:
+                trigger_setting[t] = 'true'
+            for k,v in trigger_setting.iteritems():
+                fields.append(('jcr:content/%s' % self.trigger_map[k], v)) 
+        if not self.module.check_mode:
+            (status, output) = self.http_request('POST', '/etc/replication/%s/%s' % (self.folder, self.name), fields)
+            self.get_agent_info()
+            if status < 200 or status > 299 or not self.exists:
+                self.module.fail_json(msg='failed to create agent: %s - %s' % (status, output))
+        self.changed = True
+    
+    # --------------------------------------------------------------------------------
+    # Delete a agent
+    # --------------------------------------------------------------------------------
+    def delete_agent(self):
+        if not self.module.check_mode:
+            (status, output) = self.http_request('DELETE', '/etc/replication/%s/%s' % (self.folder, self.name))
+            if status != 204:
+                self.module.fail_json(msg='failed to delete agent: %s - %s' % (status, output))
+        self.changed = True
+        self.msg.append('agent deleted')
+
+    # --------------------------------------------------------------------------------
+    # Enable agent
+    # --------------------------------------------------------------------------------
+    def enable_agent(self):
+        fields = [('jcr:content/enabled', 'true')]
+        if not self.module.check_mode:
+            (status, output) = self.http_request('POST', '/etc/replication/%s/%s' % (self.folder, self.name), fields)
+            if status != 200:
+                self.module.fail_json(msg='failed to enable agent: %s - %s' % (status, output))
+        self.changed = True
+        self.msg.append('agent enabled')
+
+    # --------------------------------------------------------------------------------
+    # Disable agent
+    # --------------------------------------------------------------------------------
+    def disable_agent(self):
+        fields = [('jcr:content/enabled', 'false')]
+        if not self.module.check_mode:
+            (status, output) = self.http_request('POST', '/etc/replication/%s/%s' % (self.folder, self.name), fields)
+            if status != 200:
+                self.module.fail_json(msg='failed to disable agent: %s - %s' % (status, output))
+        self.changed = True
+        self.msg.append('agent disabled')
+
+    # --------------------------------------------------------------------------------
+    # Set password
+    # --------------------------------------------------------------------------------
+    def set_password(self):
+        fields = [('jcr:content/transportPassword', self.transport_password)]
+        if not self.module.check_mode:
+            (status, output) = self.http_request('POST', '/etc/replication/%s/%s' % (self.folder, self.name), fields)
+            if status != 200:
+                self.module.fail_json(msg='failed to change password: %s - %s' % (status, output))
+        self.changed = True
+        self.msg.append('password changed')
+
+    # --------------------------------------------------------------------------------
+    # Issue http request.
+    # --------------------------------------------------------------------------------
+    def http_request(self, method, url, fields = None):
+        headers = {'Authorization' : 'Basic ' + base64.b64encode(self.admin_user + ':' + self.admin_password)}
+        if fields:
+            data = urllib.urlencode(fields)
+            headers['Content-type'] = 'application/x-www-form-urlencoded'
+        else:
+            data = None
+	conn = httplib.HTTPConnection(self.host + ':' + self.port)
+	try:
+	    conn.request(method, url, data, headers)
+        except Exception as e:
+	    self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
+	resp = conn.getresponse()
+        output = resp.read()
+	return (resp.status, output)
+
+    # --------------------------------------------------------------------------------
+    # Generate a random password 
+    # --------------------------------------------------------------------------------
+    def generate_password(self):
+        chars = string.ascii_letters + string.digits + '!@#$%^&*()-_=+.,:;|?'
+        self.password = ''
+        for i in range(0,12):
+            self.password += random.choice(chars)
+        self.msg.append("generated password '%s'" % self.password)
+
+    # --------------------------------------------------------------------------------
+    # Return status and msg to Ansible.
+    # --------------------------------------------------------------------------------
+    def exit_status(self):
+        if self.changed:
+            msg = ','.join(self.msg)
+            self.module.exit_json(changed=True, msg=msg)
+        else:
+            self.module.exit_json(changed=False)
+
+
+# --------------------------------------------------------------------------------
+# Mainline.
+# --------------------------------------------------------------------------------
+def main():
+    module = AnsibleModule(
+        argument_spec          = dict(
+            state              = dict(required=True, choices=['present', 'absent', 'enabled', 'disabled', 'password']),
+            folder             = dict(required=True),
+            name               = dict(required=True),
+            title              = dict(default=None),
+            transport_uri      = dict(default=None),
+            transport_user     = dict(default=None),
+            transport_password = dict(default=None),
+            template           = dict(default='/libs/cq/replication/templates/agent'),
+            resource_type      = dict(default='/libs/cq/replication/components/agent'),
+            retry_delay        = dict(default=60000, type='int'),
+            triggers           = dict(default=None, type='list'),
+            log_level          = dict(default='info'),
+            serialization_type = dict(default='durbo'),
+            admin_user         = dict(required=True),
+            admin_password     = dict(required=True),
+            host               = dict(required=True),
+            port               = dict(required=True),
+            ),
+        supports_check_mode=True
+        )
+
+    agent = CQAgent(module)
+    
+    state = module.params['state']
+
+    if state == 'present':
+        agent.present()
+    elif state == 'absent':
+        agent.absent()
+    elif state == 'enabled':
+        agent.enable()
+    elif state == 'disabled':
+        agent.disable()
+    elif state == 'password':
+        agent.password()
+    else:
+        module.fail_json(msg='Invalid state: %s' % state)
+
+    agent.exit_status()
+
+# --------------------------------------------------------------------------------
+# Ansible boiler plate code.
+# --------------------------------------------------------------------------------
+from ansible.module_utils.basic import *
+main()

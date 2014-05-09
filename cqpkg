@@ -1,0 +1,233 @@
+#!/usr/bin/python
+
+import sys
+import os
+import platform
+import httplib
+import urllib
+import base64
+import json
+
+# --------------------------------------------------------------------------------
+# Helper function to walk the package list tree and extra info.
+# --------------------------------------------------------------------------------
+
+def find_pkg(tree, pkg):
+    for key in tree:
+        if key == '.snapshot':
+            continue
+        if key == pkg:
+            if 'lastUnpacked' in tree[key]['jcr:content']['vlt:definition']:
+                installed = True
+            else:
+                installed = False
+            result = {'group': tree[key]['jcr:content']['vlt:definition']['group'],
+                      'installed': installed}
+            return result
+        if type(tree[key]) == type(dict()):
+            rc = find_pkg(tree[key], pkg)
+            if rc:
+                return rc
+    return None
+
+# --------------------------------------------------------------------------------
+# CQPkg class.
+# --------------------------------------------------------------------------------
+class CQPkg(object):
+    def __init__(self, module):
+        self.module         = module
+        self.name           = self.module.params['name']
+        self.state          = self.module.params['state']
+        self.path           = self.module.params['path']
+        self.admin_user     = self.module.params['admin_user']
+        self.admin_password = self.module.params['admin_password']
+        self.host           = self.module.params['host']
+        self.port           = self.module.params['port']
+        
+        self.curl_cmd       = self.module.get_bin_path('curl', True)
+        self.changed        = False
+        self.msg            = []
+
+        self.get_pkg_info()
+
+    # --------------------------------------------------------------------------------
+    # Look up group info.
+    # --------------------------------------------------------------------------------
+    def get_pkg_info(self):
+        data = json.loads(self.http_request('GET', '/etc/packages.9.json'))
+	pkg_info = find_pkg(data, self.name)
+	if pkg_info == None:
+	    self.pkg_uploaded = False
+	    self.pkg_installed = False
+	    self.group = None
+	else:
+	    self.pkg_uploaded = True
+	    self.pkg_installed = pkg_info['installed']
+	    self.group = pkg_info['group']
+
+    # --------------------------------------------------------------------------------
+    # state='present'
+    # --------------------------------------------------------------------------------
+    def present(self):
+	if not self.pkg_uploaded:
+	    self.upload_pkg()
+        if not self.pkg_installed:
+	    self.install_pkg()
+
+    # --------------------------------------------------------------------------------
+    # state='absent'
+    # --------------------------------------------------------------------------------
+    def absent(self):
+        if self.pkg_installed:
+	    self.uninstall_pkg()
+	if self.pkg_uploaded:
+	    self.delete_pkg()
+
+    # --------------------------------------------------------------------------------
+    # state='uploaded'
+    # --------------------------------------------------------------------------------
+    def uploaded(self):
+	if not self.pkg_uploaded:
+	    self.upload_pkg()
+
+    # --------------------------------------------------------------------------------
+    # state='uninstalled'
+    # --------------------------------------------------------------------------------
+    def uninstalled(self):
+	if self.pkg_installed:
+	    self.uninstall_pkg()
+
+    # --------------------------------------------------------------------------------
+    # Upload a package.
+    #
+    # NOTE: this is ugly and uses curl to upload the package until I can figure
+    #       out the Python code to do it.
+    #
+    # WARNING: This leaves the admin_username and admin_password exposed to a ps command.
+    #
+    # TODO: re-implement this (perhaps using code from
+    #       http://code.activestate.com/recipes/578846-composing-a-postable-http-request-with-multipartfo/)
+    # --------------------------------------------------------------------------------
+    def upload_pkg(self):
+        if not self.path:
+            self.module.fail_json(msg='Missing required argument: path')
+
+        file = '%s/%s' % (self.path, self.name)
+        if not os.path.isfile(file):
+            self.module.fail_json(msg="File '%s' doesn't exist" % file)
+        if not self.module.check_mode:
+            cmd='%s -u %s:%s -F package=@%s http://localhost:4502/crx/packmgr/service/.json/?cmd=upload' % (self.curl_cmd, self.admin_user, self.admin_password, file)
+            (rc, out, err) = self.module.run_command(cmd)
+            if rc != 0:
+                self.module.fail_json(msg='Package upload failed: rc=%s stdout=%s stderr=%s' % (rc, out, err))
+
+            # Check that we can find the package after upload. This assumes the file name matches the 
+            # name in the meta data in the package.
+            self.get_pkg_info()
+            if not self.pkg_uploaded:
+                self.module.fail_json(msg="Error: can't find package '%s' after upload" % self.name)
+
+        self.changed = True
+        self.msg.append('package uploaded')
+
+    # --------------------------------------------------------------------------------
+    # Install a package. Must already have been uploaded.
+    # --------------------------------------------------------------------------------
+    def install_pkg(self):
+        if not self.module.check_mode:
+            url = '/crx/packmgr/service/.json/etc/packages/%s/%s?cmd=install' % (self.group, self.name)
+            data = json.loads(self.http_request('POST', url))
+            if not data['success']:
+                self.module.fail_json(msg='Package install failed: %s - %s' % (url, data['msg']))
+        self.changed = True
+        self.msg.append('package installed')
+
+    # --------------------------------------------------------------------------------
+    # Uninstall a package.
+    # --------------------------------------------------------------------------------
+    def uninstall_pkg(self):
+        if not self.module.check_mode:
+            url = '/crx/packmgr/service/.json/etc/packages/%s/%s?cmd=uninstall' % (self.group, self.name)
+            data = json.loads(self.http_request('POST', url))
+            if not data['success']:
+                self.module.fail_json(msg='Package uninstall failed: %s - %s' % (url, data['msg']))
+        self.changed = True
+        self.msg.append('package uninstalled')
+
+    # --------------------------------------------------------------------------------
+    # Delete a package.
+    # --------------------------------------------------------------------------------
+    def delete_pkg(self):
+        if not self.module.check_mode:
+            url = '/crx/packmgr/service/.json/etc/packages/%s/%s?cmd=delete' % (self.group, self.name)
+            data = json.loads(self.http_request('POST', url))
+            if not data['success']:
+                self.module.fail_json(msg='Package delete failed: %s - %s' % (url, data['msg']))
+        self.changed = True
+        self.msg.append('package deleted')
+
+    # --------------------------------------------------------------------------------
+    # Issue http request.
+    # --------------------------------------------------------------------------------
+    def http_request(self, method, url, data=None):
+        headers = {'Authorization' : 'Basic ' + base64.b64encode(self.admin_user + ':' + self.admin_password)}
+	conn = httplib.HTTPConnection(self.host + ':' + self.port)
+	try:
+	    conn.request(method, url, data, headers)
+        except Exception as e:
+	    self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
+	resp = conn.getresponse()
+	if resp.status < 200 or resp.status > 299:
+	    self.module.fail_json(msg="http request '%s %s' failed: %s %s" % (method, url, resp.status, resp.reason))
+	return resp.read()
+
+    # --------------------------------------------------------------------------------
+    # Return status and msg to Ansible.
+    # --------------------------------------------------------------------------------
+    def exit_status(self):
+        if self.changed:
+            msg = ','.join(self.msg)
+            self.module.exit_json(changed=True, msg=msg)
+        else:
+            self.module.exit_json(changed=False)
+
+
+# --------------------------------------------------------------------------------
+# Mainline.
+# --------------------------------------------------------------------------------
+def main():
+    module = AnsibleModule(
+        argument_spec      = dict(
+            name           = dict(required=True),
+            state          = dict(required=True, choices=['present', 'absent', 'uploaded', 'uninstalled']),
+            path           = dict(default=None),
+            admin_user     = dict(required=True),
+            admin_password = dict(required=True),
+            host           = dict(required=True),
+            port           = dict(required=True),
+            ),
+        supports_check_mode=True
+        )
+
+    pkg = CQPkg(module)
+    
+    state = module.params['state']
+
+    if state == 'present':
+        pkg.present()
+    elif state == 'uploaded':
+        pkg.uploaded()
+    elif state == 'uninstalled':
+        pkg.uninstalled()
+    elif state == 'absent':
+        pkg.absent()
+    else:
+        module.fail_json(msg='Invalid state: %s' % state)
+
+    pkg.exit_status()
+
+# --------------------------------------------------------------------------------
+# Ansible boiler plate code.
+# --------------------------------------------------------------------------------
+from ansible.module_utils.basic import *
+main()
