@@ -1,5 +1,12 @@
 #!/usr/bin/python
 
+# Manage packages in Adobe CQ
+#
+# The installation of a bunch of hotfixes seems to have problems. CQ still seems to be process the upload and install even
+# after it's returned from the http call. During this time it can also return odd http result codes (e.g. 404, 409, 503).
+# To try and get around these issues, this program contains lots of retries. Pretty ugly, but it's the only way I could
+# get it to work reliably.
+
 import sys
 import os
 import platform
@@ -7,6 +14,7 @@ import httplib
 import urllib
 import base64
 import json
+import time
 
 # --------------------------------------------------------------------------------
 # Helper function to walk the package list tree and extra info.
@@ -43,6 +51,7 @@ class CQPkg(object):
         self.admin_password = self.module.params['admin_password']
         self.host           = self.module.params['host']
         self.port           = self.module.params['port']
+        self.timeout        = self.module.params['timeout']
         
         self.curl_cmd       = self.module.get_bin_path('curl', True)
         self.changed        = False
@@ -51,51 +60,66 @@ class CQPkg(object):
         self.get_pkg_info()
 
     # --------------------------------------------------------------------------------
-    # Look up group info.
+    # Look up group info
     # --------------------------------------------------------------------------------
-    def get_pkg_info(self):
-        data = json.loads(self.http_request('GET', '/etc/packages.9.json'))
-	pkg_info = find_pkg(data, self.name)
-	if pkg_info == None:
-	    self.pkg_uploaded = False
-	    self.pkg_installed = False
-	    self.group = None
-	else:
-	    self.pkg_uploaded = True
-	    self.pkg_installed = pkg_info['installed']
-	    self.group = pkg_info['group']
+    def get_pkg_info(self, wait=False):
+        start_time = time.clock()
+        while True:
+            method = 'GET'
+            url = '/etc/packages.8.json'
+            (status, output) = self.http_request(method, url)
+            if status < 200 or status > 299:
+                if status == 503 or wait:
+                    now = time.clock()
+                    if now - start_time > self.timeout:
+                        self.module.fail_json(msg="get_pkg_info: timed out trying to get package info")
+                    time.sleep(30)
+                    continue
+                else:
+                    self.module.fail_json(msg="get_pkg_info: http request '%s %s' failed: %s %s" % (method, url, status, output))
+            data = json.loads(output)
+            pkg_info = find_pkg(data, self.name)
+            if pkg_info == None:
+                self.pkg_uploaded = False
+                self.pkg_installed = False
+                self.group = None
+            else:
+                self.pkg_uploaded = True
+                self.pkg_installed = pkg_info['installed']
+                self.group = pkg_info['group']
+            break
 
     # --------------------------------------------------------------------------------
     # state='present'
     # --------------------------------------------------------------------------------
     def present(self):
-	if not self.pkg_uploaded:
-	    self.upload_pkg()
+        if not self.pkg_uploaded:
+            self.upload_pkg()
         if not self.pkg_installed:
-	    self.install_pkg()
+            self.install_pkg()
 
     # --------------------------------------------------------------------------------
     # state='absent'
     # --------------------------------------------------------------------------------
     def absent(self):
         if self.pkg_installed:
-	    self.uninstall_pkg()
-	if self.pkg_uploaded:
-	    self.delete_pkg()
+            self.uninstall_pkg()
+        if self.pkg_uploaded:
+            self.delete_pkg()
 
     # --------------------------------------------------------------------------------
     # state='uploaded'
     # --------------------------------------------------------------------------------
     def uploaded(self):
-	if not self.pkg_uploaded:
-	    self.upload_pkg()
+        if not self.pkg_uploaded:
+            self.upload_pkg()
 
     # --------------------------------------------------------------------------------
     # state='uninstalled'
     # --------------------------------------------------------------------------------
     def uninstalled(self):
-	if self.pkg_installed:
-	    self.uninstall_pkg()
+        if self.pkg_installed:
+            self.uninstall_pkg()
 
     # --------------------------------------------------------------------------------
     # Upload a package.
@@ -112,20 +136,32 @@ class CQPkg(object):
         if not self.path:
             self.module.fail_json(msg='Missing required argument: path')
 
-        file = '%s/%s' % (self.path, self.name)
-        if not os.path.isfile(file):
-            self.module.fail_json(msg="File '%s' doesn't exist" % file)
-        if not self.module.check_mode:
-            cmd='%s -u %s:%s -F package=@%s http://localhost:4502/crx/packmgr/service/.json/?cmd=upload' % (self.curl_cmd, self.admin_user, self.admin_password, file)
-            (rc, out, err) = self.module.run_command(cmd)
-            if rc != 0:
-                self.module.fail_json(msg='Package upload failed: rc=%s stdout=%s stderr=%s' % (rc, out, err))
+        start_time = time.clock()
+        while True:
+            file = self.path
+            if not os.path.isfile(file):
+                file = '%s/%s' % (self.path, self.name)
+            if not os.path.isfile(file):
+                self.module.fail_json(msg="upload_pkg: File '%s' doesn't exist" % file)
+            if not self.module.check_mode:
+                cmd='%s -u %s:%s -v -q -F package=@%s http://%s:%s/crx/packmgr/service/.json/?cmd=upload' % (self.curl_cmd, self.admin_user, self.admin_password, file, self.host, self.port)
+                (rc, out, err) = self.module.run_command(cmd)
+                now = time.clock()
+                if rc != 0:
+                    if now - start_time > self.timeout:
+                        self.module.fail_json(msg='upload_pkg: Package upload failed: rc=%s stdout=%s stderr=%s' % (rc, out, err))
+                    else:
+                         time.sleep(30)
+                         continue
 
-            # Check that we can find the package after upload. This assumes the file name matches the 
-            # name in the meta data in the package.
-            self.get_pkg_info()
-            if not self.pkg_uploaded:
-                self.module.fail_json(msg="Error: can't find package '%s' after upload" % self.name)
+                self.get_pkg_info(wait=True)
+                if not self.pkg_uploaded:
+                    if now - start_time > self.timeout:
+                        self.module.fail_json(msg="upload_pkg: Error: can't find package '%s' after upload. %s - %s" % (self.name, out, err))
+                    else:
+                        time.sleep(30)
+                        continue
+            break
 
         self.changed = True
         self.msg.append('package uploaded')
@@ -135,10 +171,35 @@ class CQPkg(object):
     # --------------------------------------------------------------------------------
     def install_pkg(self):
         if not self.module.check_mode:
-            url = '/crx/packmgr/service/.json/etc/packages/%s/%s?cmd=install' % (self.group, self.name)
-            data = json.loads(self.http_request('POST', url))
-            if not data['success']:
-                self.module.fail_json(msg='Package install failed: %s - %s' % (url, data['msg']))
+            start_time = time.clock()
+            while True:
+                url = '/crx/packmgr/service/.json/etc/packages/%s/%s?cmd=install' % (self.group, self.name)
+                (status, output) = self.http_request('POST', url)
+                if status < 200 or status > 299:
+                    now = time.clock()
+                    if now - start_time > self.timeout:
+                        self.module.fail_json(msg="install_pkg: http request '%s %s' failed: %s %s" % ('POST', url, status, output))
+                    else:
+                        time.sleep(30)
+                        continue
+                try:
+                    data = json.loads(output)
+                except Exception as e:
+                    now = time.clock()
+                    if now - start_time > self.timeout:
+                        self.module.fail_json(msg='install_pkg: failed to decode JSON: %s %s' % (e, output))
+                    else:
+                        time.sleep(30)
+                        continue
+                if not data['success']:
+                    now = time.clock()
+                    if now - start_time > self.timeout:
+                        self.module.fail_json(msg='install_pkg: Package install failed: %s - %s' % (url, data['msg']))
+                    else:
+                        time.sleep(30)
+                        continue
+                self.wait_for_completion()
+                break
         self.changed = True
         self.msg.append('package installed')
 
@@ -147,10 +208,15 @@ class CQPkg(object):
     # --------------------------------------------------------------------------------
     def uninstall_pkg(self):
         if not self.module.check_mode:
+            method = 'POST'
             url = '/crx/packmgr/service/.json/etc/packages/%s/%s?cmd=uninstall' % (self.group, self.name)
-            data = json.loads(self.http_request('POST', url))
+            (status, output) = self.http_request(method, url)
+            if status < 200 or status > 299:
+                self.module.fail_json(msg="http request '%s %s' failed: %s %s" % (method, url, status, output))
+            data = json.loads(output)
             if not data['success']:
                 self.module.fail_json(msg='Package uninstall failed: %s - %s' % (url, data['msg']))
+            self.wait_for_completion()
         self.changed = True
         self.msg.append('package uninstalled')
 
@@ -159,27 +225,45 @@ class CQPkg(object):
     # --------------------------------------------------------------------------------
     def delete_pkg(self):
         if not self.module.check_mode:
+            method = 'POST'
             url = '/crx/packmgr/service/.json/etc/packages/%s/%s?cmd=delete' % (self.group, self.name)
-            data = json.loads(self.http_request('POST', url))
+            (status, output) = self.http_request(method, url)
+            if status < 200 or status > 299:
+                self.module.fail_json(msg="http request '%s %s' failed: %s %s" % (method, url, status, output))
+            data = json.loads(output)
             if not data['success']:
                 self.module.fail_json(msg='Package delete failed: %s - %s' % (url, data['msg']))
         self.changed = True
         self.msg.append('package deleted')
 
     # --------------------------------------------------------------------------------
+    # Installing a package can make the system return HTTP errors while it's
+    # being installed in the background.
+    # Poll the server and wait for it to start returning pages before continuing.
+    # --------------------------------------------------------------------------------
+    def wait_for_completion(self):
+        start_time = time.clock()
+        while True:
+            url = '/etc/packages.8.json'
+            (status, output) = self.http_request('GET', url)
+            if status == 200:
+                break
+            if (time.clock() - start_time) > self.timeout:
+                self.module.fail_json(msg='Timed out waiting for package install')
+            time.sleep(30)
+
+    # --------------------------------------------------------------------------------
     # Issue http request.
     # --------------------------------------------------------------------------------
     def http_request(self, method, url, data=None):
         headers = {'Authorization' : 'Basic ' + base64.b64encode(self.admin_user + ':' + self.admin_password)}
-	conn = httplib.HTTPConnection(self.host + ':' + self.port)
-	try:
-	    conn.request(method, url, data, headers)
+        conn = httplib.HTTPConnection(self.host + ':' + self.port)
+        try:
+            conn.request(method, url, data, headers)
         except Exception as e:
-	    self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
-	resp = conn.getresponse()
-	if resp.status < 200 or resp.status > 299:
-	    self.module.fail_json(msg="http request '%s %s' failed: %s %s" % (method, url, resp.status, resp.reason))
-	return resp.read()
+            self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
+        resp = conn.getresponse()
+        return (resp.status, resp.read())
 
     # --------------------------------------------------------------------------------
     # Return status and msg to Ansible.
@@ -205,6 +289,7 @@ def main():
             admin_password = dict(required=True),
             host           = dict(required=True),
             port           = dict(required=True),
+            timeout        = dict(default=600),
             ),
         supports_check_mode=True
         )

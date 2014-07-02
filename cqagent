@@ -38,6 +38,10 @@ class CQAgent(object):
         if not self.title:
             self.title = self.name
 
+        # handle empty triggers list
+        if self.triggers and len(self.triggers) == 1 and self.triggers[0] == "":
+            self.triggers = None
+
         self.changed = False
         self.msg = []
 
@@ -68,7 +72,10 @@ class CQAgent(object):
         if status == 200:
             self.exists = True
             self.info = json.loads(output)
-            self.enabled = self.info['jcr:content']['enabled']
+            if 'enabled' in self.info['jcr:content']:
+                self.enabled = self.info['jcr:content']['enabled']
+            else:
+                self.enabled = 'false'
         else:
             self.exists = False
 
@@ -76,27 +83,36 @@ class CQAgent(object):
     # state='present'
     # --------------------------------------------------------------------------------
     def present(self):
-	if self.exists:
+        if self.exists:
             # Update existing agent
             update_required = False
             if self.title != self.info['jcr:content']['jcr:title']:
                 update_required = True
                 self.msg.append("title updated from '%s' to '%s'" % (self.info['jcr:content']['jcr:title'], self.title))
+
             if self.retry_delay != int(self.info['jcr:content']['retryDelay']):
                 update_required = True
                 self.msg.append("retry_delay updated from '%s' to '%s'" % (self.info['jcr:content']['retryDelay'], self_retry_delay))
+
+            if not 'serializationType' in self.info['jcr:content']:
+                self.info['jcr:content']['serializationType'] = ''
             if self.serialization_type != self.info['jcr:content']['serializationType']:
                 update_required = True
-                self.msg.append("serialization_type updated from '%s' to '%s'" % ( self.info['jcr:content']['serializationType'], self.serializationType))
+                self.msg.append("serialization_type updated from '%s' to '%s'" % ( self.info['jcr:content']['serializationType'], self.serialization_type))
+
             if self.template != self.info['jcr:content']['template']:
                 update_required = True
                 self.msg.append("template updated from '%s' to '%s'" % (self.info['jcr:content']['template'], self.template))
+
             if self.transport_uri != self.info['jcr:content']['transportUri']:
                 update_required = True
                 self.msg.append("transport_uri updated from '%s' to '%s'" % (self.info['jcr:content']['transportUri'], self.transport_uri))
             if self.transport_user != self.info['jcr:content']['transportUser']:
                 update_required = True
-                self.msg.append("transport_user updated from '%s' to '%s'" % (self.info['jcr:content']['transportUri'], self.transport_user))
+                if not self.transport_user:
+                    self.transport_user = ""
+                self.msg.append("transport_user updated from '%s' to '%s'" % (self.info['jcr:content']['transportUser'], self.transport_user))
+
             if self.triggers:
                 curr_triggers = []
                 for field in self.info['jcr:content']:
@@ -109,13 +125,14 @@ class CQAgent(object):
                 if t1 != t2:
                     update_required = True
                     self.msg.append("triggers updated from '%s' to '%s'" % (t1, t2))
+
             if update_required:
                self.transport_password = None
                self.define_agent()
             self.msg.append('agent updated')
         else:
             # Create a new agent
-	    self.define_agent()
+            self.define_agent()
             self.msg.append('agent created')
 
     # --------------------------------------------------------------------------------
@@ -123,7 +140,7 @@ class CQAgent(object):
     # --------------------------------------------------------------------------------
     def absent(self):
         if self.exists:
-	    self.delete_agent()
+            self.delete_agent()
 
     # --------------------------------------------------------------------------------
     # state='enabled'
@@ -131,7 +148,7 @@ class CQAgent(object):
     def enable(self):
         if self.exists:
             if self.enabled == 'false':
-	        self.enable_agent()
+                self.enable_agent()
         else:
             self.module.fail_json(msg="can't find agent '/etc/replication/%s/%s'" % (self.folder, self.name))
 
@@ -141,7 +158,7 @@ class CQAgent(object):
     def disable(self):
         if self.exists:
             if self.enabled == 'true':
-	        self.disable_agent()
+                self.disable_agent()
         else:
             self.module.fail_json(msg="can't find agent '/etc/replication/%s/%s'" % (self.folder, self.name))
 
@@ -152,7 +169,7 @@ class CQAgent(object):
         if self.exists:
             if not self.transport_password:
                 self.module.fail_json(msg='Missing required argument: transport_password')
-	    self.set_password()
+            self.set_password()
         else:
             self.module.fail_json(msg="can't find agent '/etc/replication/%s/%s'" % (self.folder, self.name))
 
@@ -251,24 +268,14 @@ class CQAgent(object):
             headers['Content-type'] = 'application/x-www-form-urlencoded'
         else:
             data = None
-	conn = httplib.HTTPConnection(self.host + ':' + self.port)
-	try:
-	    conn.request(method, url, data, headers)
+        conn = httplib.HTTPConnection(self.host + ':' + self.port)
+        try:
+            conn.request(method, url, data, headers)
         except Exception as e:
-	    self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
-	resp = conn.getresponse()
+            self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
+        resp = conn.getresponse()
         output = resp.read()
-	return (resp.status, output)
-
-    # --------------------------------------------------------------------------------
-    # Generate a random password 
-    # --------------------------------------------------------------------------------
-    def generate_password(self):
-        chars = string.ascii_letters + string.digits + '!@#$%^&*()-_=+.,:;|?'
-        self.password = ''
-        for i in range(0,12):
-            self.password += random.choice(chars)
-        self.msg.append("generated password '%s'" % self.password)
+        return (resp.status, output)
 
     # --------------------------------------------------------------------------------
     # Return status and msg to Ansible.

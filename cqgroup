@@ -49,7 +49,7 @@ class CQGroup(object):
     # state='present'
     # --------------------------------------------------------------------------------
     def present(self):
-	if self.exists:
+        if self.exists:
             # Update existing group
             if self.name:
                 if self.curr_name != self.name:
@@ -66,14 +66,14 @@ class CQGroup(object):
             # Create new group
             if not self.name:
                 self.module.fail_json(msg='Missing required argument: name')
-	    self.create_group()
+            self.create_group()
 
     # --------------------------------------------------------------------------------
     # state='absent'
     # --------------------------------------------------------------------------------
     def absent(self):
         if self.exists:
-	    self.delete_group()
+            self.delete_group()
 
     # --------------------------------------------------------------------------------
     # Create a new group
@@ -143,14 +143,14 @@ class CQGroup(object):
             headers['Content-type'] = 'application/x-www-form-urlencoded'
         else:
             data = None
-	conn = httplib.HTTPConnection(self.host + ':' + self.port)
-	try:
-	    conn.request(method, url, data, headers)
+        conn = httplib.HTTPConnection(self.host + ':' + self.port)
+        try:
+            conn.request(method, url, data, headers)
         except Exception as e:
-	    self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
-	resp = conn.getresponse()
+            self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
+        resp = conn.getresponse()
         output = resp.read()
-	return (resp.status, output)
+        return (resp.status, output)
 
     # --------------------------------------------------------------------------------
     # Return status and msg to Ansible.
