@@ -126,6 +126,24 @@ class CQAgent(object):
                     update_required = True
                     self.msg.append("triggers updated from '%s' to '%s'" % (t1, t2))
 
+            if self.serialization_type == 'flush':
+                if not 'protocolHTTPMethod' in self.info['jcr:content']:
+                    update_required = True
+                    self.msg.append("protol HTTP method set to '%s'" % ('GET'))
+                elif self.info['jcr:content']['protocolHTTPMethod'] != 'GET':
+                    update_required = True
+                    self.msg.append("protol HTTP method updated from '%s' to '%s'" % (self.info['jcr:content']['protocolHTTPMethod'], 'GET'))
+
+                flush_headers = "CQ-Action:{action},CQ-Handle:{path},CQ-Path:{path}"
+                if not 'protocolHTTPHeaders' in self.info['jcr:content']:
+                    update_required = True
+                    self.msg.append("protol HTTP headers'%s'" % (flush_headers))
+                else: 
+                    curr_headers = ','.join(self.info['jcr:content']['protocolHTTPHeaders'])
+                    if curr_headers != flush_headers:
+                        update_required = True
+                        self.msg.append("protol HTTP method updated from '%s' to '%s'" % (curr_headers, flush_headers))
+
             if update_required:
                self.transport_password = None
                self.define_agent()
@@ -195,6 +213,11 @@ class CQAgent(object):
             fields.append(('jcr:content/transportUser', self.transport_user))
         if self.transport_password:
             fields.append(('jcr:content/transportPassword', self.transport_password))
+        if self.serialization_type == 'flush':
+            fields.append(('jcr:content/protocolHTTPMethod', 'GET'))
+            fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Action:{action}'))
+            fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Handle:{path}'))
+            fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Path:{path}'))
 
         if self.triggers:
             trigger_setting = {}
