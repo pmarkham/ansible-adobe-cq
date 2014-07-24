@@ -15,28 +15,29 @@ import urllib
 import base64
 import json
 import time
+import xml.etree.ElementTree as ET
 
 # --------------------------------------------------------------------------------
 # Helper function to walk the package list tree and extra info.
 # --------------------------------------------------------------------------------
 
-def find_pkg(tree, pkg):
-    for key in tree:
-        if key == '.snapshot':
-            continue
-        if key == pkg:
-            if 'lastUnpacked' in tree[key]['jcr:content']['vlt:definition']:
+def find_pkg(data, pkg_name):
+    tree = ET.fromstring(data)
+    installed = False
+    group = None
+    result = None
+    
+    for pkg in tree.find('response/data/packages'):
+        pkginfo = {}
+        for i in pkg:
+            pkginfo[i.tag] = i.text
+        if pkginfo['downloadName'] == pkg_name:
+            group = pkginfo['group']
+            if pkginfo['lastUnpacked']:
                 installed = True
-            else:
-                installed = False
-            result = {'group': tree[key]['jcr:content']['vlt:definition']['group'],
-                      'installed': installed}
-            return result
-        if type(tree[key]) == type(dict()):
-            rc = find_pkg(tree[key], pkg)
-            if rc:
-                return rc
-    return None
+            result = {'group': group, 'installed': installed}
+            
+    return result
 
 # --------------------------------------------------------------------------------
 # CQPkg class.
@@ -64,14 +65,10 @@ class CQPkg(object):
     # --------------------------------------------------------------------------------
     def get_pkg_info(self, wait=False):
         start_time = time.clock()
-        instance = 9
         while True:
             method = 'GET'
-            url = '/etc/packages.%s.json' % instance
+            url = '/crx/packmgr/service.jsp?cmd=ls'
             (status, output) = self.http_request(method, url)
-            if status == 300:
-                instance = instance - 1
-                continue
             if status < 200 or status > 299:
                 if status == 503 or wait:
                     now = time.clock()
@@ -81,8 +78,7 @@ class CQPkg(object):
                     continue
                 else:
                     self.module.fail_json(msg="get_pkg_info: http request '%s %s' failed: %s %s" % (method, url, status, output))
-            data = json.loads(output)
-            pkg_info = find_pkg(data, self.name)
+            pkg_info = find_pkg(output, self.name)
             if pkg_info == None:
                 self.pkg_uploaded = False
                 self.pkg_installed = False
@@ -247,13 +243,9 @@ class CQPkg(object):
     # --------------------------------------------------------------------------------
     def wait_for_completion(self):
         start_time = time.clock()
-        instance = 9
         while True:
-            url = '/etc/packages.%d.json' % instance
+            url = '/crx/packmgr/service.jsp?cmd=ls'
             (status, output) = self.http_request('GET', url)
-            if status == 300:
-                instance = instance - 1
-                continue
             if status == 200:
                 break
             if (time.clock() - start_time) > self.timeout:
