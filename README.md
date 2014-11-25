@@ -14,7 +14,7 @@ Create a basic group. This module doesn't handle access control lists so it's no
 
 ## cqpassword
 
-Change the admin user password. TODO: check if this is necessary, or can be done by the cquser module
+Change user's password. 
 
 ## cqpkg
 
@@ -22,4 +22,14 @@ Manage CQ packages
 
 ## cquser
 
-Creat and modify users
+Create and modify users
+
+
+## cqbundle
+
+Stop/start bundles
+
+
+## cqservice
+
+Stop/start CQ instance
