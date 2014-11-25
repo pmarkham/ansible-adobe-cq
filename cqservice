@@ -1,0 +1,208 @@
+#!/usr/bin/python
+
+import sys
+import os
+import platform
+import httplib
+import urllib
+import base64
+import json
+import socket
+import re
+import time
+
+# --------------------------------------------------------------------------------
+# CQService class.
+# --------------------------------------------------------------------------------
+class CQService(object):
+    def __init__(self, module):
+        self.module         = module
+        self.state          = self.module.params['state']
+        self.uri            = self.module.params['uri']
+        self.pattern        = self.module.params['pattern']
+        self.cmd            = self.module.params['cmd']
+        self.admin_user     = self.module.params['admin_user']
+        self.admin_password = self.module.params['admin_password']
+        self.host           = self.module.params['host']
+        self.port           = self.module.params['port']
+        self.timeout        = self.module.params['timeout']
+        
+        if self.module.params['verbose'] == 'yes':
+            self.verbose = True
+        else:
+            self.verbose = False
+
+        self.changed = False
+        self.msg = []
+
+        self.process_running = self.get_process_state()
+
+    # --------------------------------------------------------------------------------
+    # Determine if the process is running. CQ opens its socket early in its startup,
+    # so use this to determine if the process is running, even if it's not fully up yet.
+    # --------------------------------------------------------------------------------
+    def get_process_state(self):
+        s = socket.socket()
+        result = s.connect_ex((self.host, int(self.port)))
+        s.close()
+        if result == 0:
+            if self.verbose:
+                self.msg.append('port is open')
+            return True
+        else:
+            if self.verbose:
+                self.msg.append('port is closed')
+            return False
+
+    # --------------------------------------------------------------------------------
+    # Wait for the CQ instance to be fully started. Do this by getting the URI 
+    # and checking if the response contains the pattern. If not, sleep for a while
+    # and try again.
+    # --------------------------------------------------------------------------------
+    def wait_for_active_instance(self):
+        start_time = time.time()
+        while True:
+            url = 'http://%s:%s%s' % (self.host, self.port, self.uri)
+            (resp, output) = self.http_request('GET', url)
+            result = re.search(self.pattern, output)
+            if result:
+                if self.verbose:
+                    self.msg.append('instance is active')
+                break
+            if time.time() - start_time > self.timeout:
+                self.module.fail_json(msg='Timed out checking waiting for instance to become active')
+            time.sleep(10)
+            continue
+
+    # --------------------------------------------------------------------------------
+    # state='started'
+    # --------------------------------------------------------------------------------
+    def started(self):
+        if not self.pattern:
+            self.module.fail_json(msg='missing required arguments: pattern')
+        if not self.uri:
+            self.module.fail_json(msg='missing required arguments: uri')
+        if self.process_running:
+            self.wait_for_active_instance()
+        else:
+            if not self.module.check_mode:
+                self.start_cq()
+            self.changed = True
+            self.msg.append('service started')
+
+    # --------------------------------------------------------------------------------
+    # state='stopped'
+    # --------------------------------------------------------------------------------
+    def stopped(self):
+        if self.process_running:
+            if not self.module.check_mode:
+                self.stop_cq()
+            self.changed = True
+            self.msg.append('service stopped')
+
+    # --------------------------------------------------------------------------------
+    # Start CQ
+    # --------------------------------------------------------------------------------
+    def start_cq(self):
+        if self.cmd == None:
+            self.cmd = "service adobecq start"
+        (rc, out, err) = self.module.run_command(self.cmd)
+        if rc != 0:
+            self.module.fail_json(msg='Error running command "%s"' % self.cmd)
+        start_time = time.time()
+        while True:
+            running = self.get_process_state()
+            if running:
+                break
+            if time.time() - start_time > self.timeout:
+                self.module.fail_json(msg='Timed out waiting for instance to start')
+            time.sleep(10)
+            continue
+        self.wait_for_active_instance()
+
+    # --------------------------------------------------------------------------------
+    # Stop CQ
+    # --------------------------------------------------------------------------------
+    def stop_cq(self):
+        if self.cmd == None:
+            self.cmd = "service adobecq stop"
+        (rc, out, err) = self.module.run_command(self.cmd)
+        if rc != 0:
+            self.module.fail_json(msg='Error running command "%s"' % self.cmd)
+        start_time = time.time()
+        while True:
+            running = self.get_process_state()
+            if not running:
+                break
+            if time.time() - start_time > self.timeout:
+                self.module.fail_json(msg='Timed out waiting for instance to stop')
+            time.sleep(10)
+            continue
+        # Give instance a chance to fully stop after TCP port is closed.
+        time.sleep(10)
+            
+    # --------------------------------------------------------------------------------
+    # Issue http request.
+    # --------------------------------------------------------------------------------
+    def http_request(self, method, url, fields = None):
+        headers = {'Authorization' : 'Basic ' + base64.b64encode(self.admin_user + ':' + self.admin_password)}
+        if fields:
+            data = urllib.urlencode(fields)
+            headers['Content-type'] = 'application/x-www-form-urlencoded'
+        else:
+            data = None
+        conn = httplib.HTTPConnection(self.host + ':' + self.port)
+        try:
+            conn.request(method, url, data, headers)
+        except Exception as e:
+            self.module.fail_json(msg="http request '%s %s' failed: %s" % (method, url, e))
+        resp = conn.getresponse()
+        output = resp.read()
+        return (resp.status, output)
+
+    # --------------------------------------------------------------------------------
+    # Return status and msg to Ansible.
+    # --------------------------------------------------------------------------------
+    def exit_status(self):
+        msg = ', '.join(self.msg)
+        self.module.exit_json(changed=self.changed, msg=msg)
+
+
+# --------------------------------------------------------------------------------
+# Mainline.
+# --------------------------------------------------------------------------------
+def main():
+    module = AnsibleModule(
+        argument_spec      = dict(
+            state          = dict(required=True, choices=['started', 'stopped']),
+            uri            = dict(required=False),
+            pattern        = dict(default=None),
+            cmd            = dict(default=None),
+            admin_user     = dict(required=True),
+            admin_password = dict(required=True),
+            verbose        = dict(default='no', choices=['yes', 'no']),
+            host           = dict(required=True),
+            port           = dict(required=True),
+            timeout        = dict(default=600),
+            ),
+        supports_check_mode=True
+        )
+
+    service = CQService(module)
+    
+    state = module.params['state']
+
+    if state == 'started':
+        service.started()
+    elif state == 'stopped':
+        service.stopped()
+    else:
+        module.fail_json(msg='Invalid state: %s' % state)
+
+    service.exit_status()
+
+# --------------------------------------------------------------------------------
+# Ansible boiler plate code.
+# --------------------------------------------------------------------------------
+from ansible.module_utils.basic import *
+main()

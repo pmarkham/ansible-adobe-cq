@@ -9,6 +9,7 @@ import base64
 import json
 import string
 import random
+import HTMLParser
 
 
 # --------------------------------------------------------------------------------
@@ -24,6 +25,7 @@ class CQAgent(object):
         self.transport_uri      = self.module.params['transport_uri']
         self.transport_user     = self.module.params['transport_user']
         self.transport_password = self.module.params['transport_password']
+        self.agent_user         = self.module.params['agent_user']
         self.retry_delay        = self.module.params['retry_delay']
         self.template           = self.module.params['template']
         self.resource_type      = self.module.params['resource_type']
@@ -34,9 +36,23 @@ class CQAgent(object):
         self.admin_password     = self.module.params['admin_password']
         self.host               = self.module.params['host']
         self.port               = self.module.params['port']
+        self.connect_timeout    = self.module.params['connect_timeout']
+        self.protocol_version   = self.module.params['protocol_version']
+
+        if self.module.params['headers']:
+            html = HTMLParser.HTMLParser()
+            headers = html.unescape(self.module.params['headers'])
+            self.headers = eval(headers)
+        else:
+            self.headers = None
 
         if not self.title:
             self.title = self.name
+
+        if self.module.params['connection_close']:
+            self.connection_close = 'true'
+        else:
+            self.connection_close = 'false'
 
         # handle empty triggers list
         if self.triggers and len(self.triggers) == 1 and self.triggers[0] == "":
@@ -126,15 +142,48 @@ class CQAgent(object):
                     update_required = True
                     self.msg.append("triggers updated from '%s' to '%s'" % (t1, t2))
 
+            if not 'logLevel' in self.info['jcr:content']:
+                self.info['jcr:content']['logLevel'] = ''
+            if self.log_level != self.info['jcr:content']['logLevel']:
+                update_required = True
+                self.msg.append("log level updated from '%s' to '%s'" % ( self.info['jcr:content']['logLevel'], self.log_level))
+
+            if not 'protocolHTTPConnectionClose' in self.info['jcr:content']:
+                self.info['jcr:content']['protocolHTTPConnectionClose'] = 'false' 
+            if self.connection_close != self.info['jcr:content']['protocolHTTPConnectionClose']:
+                update_required = True
+                self.msg.append("protocol HTTP close updated from '%s' to '%s'" % ( self.info['jcr:content']['protocolHTTPConnectionClose'], self.connection_close))
+
+            if not 'protocolConnectTimeout' in self.info['jcr:content']:
+                self.info['jcr:content']['protocolConnectTimeout'] = '' 
+            if self.connect_timeout != self.info['jcr:content']['protocolConnectTimeout']:
+                update_required = True
+                self.msg.append("connection timeout updated from '%s' to '%s'" % ( self.info['jcr:content']['protocolConnectTimeout'], self.connect_timeout))
+
+            if not 'protocolVersion' in self.info['jcr:content']:
+                self.info['jcr:content']['protocolVersion'] = '' 
+            if self.protocol_version != self.info['jcr:content']['protocolVersion']:
+                update_required = True
+                self.msg.append("protocol version updated from '%s' to '%s'" % ( self.info['jcr:content']['protocolVersion'], self.protocol_version))
+
+            if not 'userId' in self.info['jcr:content']:
+                self.info['jcr:content']['userId'] = ''
+            if self.agent_user != self.info['jcr:content']['userId']:
+                update_required = True
+                self.msg.append("agent user ID updated from '%s' to '%s'" % ( self.info['jcr:content']['userId'], self.agent_user))
+
             if self.serialization_type == 'flush':
                 if not 'protocolHTTPMethod' in self.info['jcr:content']:
                     update_required = True
-                    self.msg.append("protol HTTP method set to '%s'" % ('GET'))
+                    self.msg.append("protocol HTTP method set to '%s'" % ('GET'))
                 elif self.info['jcr:content']['protocolHTTPMethod'] != 'GET':
                     update_required = True
-                    self.msg.append("protol HTTP method updated from '%s' to '%s'" % (self.info['jcr:content']['protocolHTTPMethod'], 'GET'))
+                    self.msg.append("protocol HTTP method updated from '%s' to '%s'" % (self.info['jcr:content']['protocolHTTPMethod'], 'GET'))
 
-                flush_headers = "CQ-Action:{action},CQ-Handle:{path},CQ-Path:{path}"
+                if self.headers:
+                    flush_headers = ','.join(self.headers)
+                else:
+                    flush_headers = "CQ-Action:{action},CQ-Handle:{path},CQ-Path:{path}"
                 if not 'protocolHTTPHeaders' in self.info['jcr:content']:
                     update_required = True
                     self.msg.append("protol HTTP headers'%s'" % (flush_headers))
@@ -142,7 +191,7 @@ class CQAgent(object):
                     curr_headers = ','.join(self.info['jcr:content']['protocolHTTPHeaders'])
                     if curr_headers != flush_headers:
                         update_required = True
-                        self.msg.append("protol HTTP method updated from '%s' to '%s'" % (curr_headers, flush_headers))
+                        self.msg.append("protol HTTP headers updated from '%s' to '%s'" % (curr_headers, flush_headers))
 
             if update_required:
                self.transport_password = None
@@ -208,16 +257,25 @@ class CQAgent(object):
             ('jcr:content/retryDelay', self.retry_delay),
             ('jcr:content/serializationType', self.serialization_type),
             ('jcr:content/logLevel', self.log_level),
+            ('jcr:content/protocolHTTPConnectionClose', self.connection_close),
+            ('jcr:content/userId', self.agent_user),
+            ('jcr:content/protocolConnectTimeout', self.connect_timeout),
+            ('jcr:content/protocolVersion', self.protocol_version),
             ]
         if self.transport_user:
             fields.append(('jcr:content/transportUser', self.transport_user))
         if self.transport_password:
             fields.append(('jcr:content/transportPassword', self.transport_password))
-        if self.serialization_type == 'flush':
+        if self.headers:
             fields.append(('jcr:content/protocolHTTPMethod', 'GET'))
-            fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Action:{action}'))
-            fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Handle:{path}'))
-            fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Path:{path}'))
+            for h in self.headers:
+                fields.append(('jcr:content/protocolHTTPHeaders', h))
+        else:
+            if self.serialization_type == 'flush':
+                fields.append(('jcr:content/protocolHTTPMethod', 'GET'))
+                fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Action:{action}'))
+                fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Handle:{path}'))
+                fields.append(('jcr:content/protocolHTTPHeaders', 'CQ-Path:{path}'))
 
         if self.triggers:
             trigger_setting = {}
@@ -324,6 +382,7 @@ def main():
             transport_uri      = dict(default=None),
             transport_user     = dict(default=None),
             transport_password = dict(default=None),
+            agent_user         = dict(default=''),
             template           = dict(default='/libs/cq/replication/templates/agent'),
             resource_type      = dict(default='/libs/cq/replication/components/agent'),
             retry_delay        = dict(default=60000, type='int'),
@@ -334,6 +393,10 @@ def main():
             admin_password     = dict(required=True),
             host               = dict(required=True),
             port               = dict(required=True),
+            headers            = dict(default=None),
+            connection_close   = dict(default=False, type='bool'),
+            connect_timeout    = dict(default=''),
+            protocol_version   = dict(default=''),
             ),
         supports_check_mode=True
         )

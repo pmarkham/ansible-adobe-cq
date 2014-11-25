@@ -53,6 +53,7 @@ class CQPkg(object):
         self.host           = self.module.params['host']
         self.port           = self.module.params['port']
         self.timeout        = self.module.params['timeout']
+        self.force          = self.module.params['force']
         
         self.curl_cmd       = self.module.get_bin_path('curl', True)
         self.changed        = False
@@ -93,18 +94,18 @@ class CQPkg(object):
     # state='present'
     # --------------------------------------------------------------------------------
     def present(self):
-        if not self.pkg_uploaded:
+        if not self.pkg_uploaded or self.force == 'yes':
             self.upload_pkg()
-        if not self.pkg_installed:
+        if not self.pkg_installed or self.force == 'yes':
             self.install_pkg()
 
     # --------------------------------------------------------------------------------
     # state='absent'
     # --------------------------------------------------------------------------------
     def absent(self):
-        if self.pkg_installed:
+        if self.pkg_installed or self.force == 'yes':
             self.uninstall_pkg()
-        if self.pkg_uploaded:
+        if self.pkg_uploaded or self.force == 'yes':
             self.delete_pkg()
 
     # --------------------------------------------------------------------------------
@@ -255,8 +256,14 @@ class CQPkg(object):
     # --------------------------------------------------------------------------------
     # Issue http request.
     # --------------------------------------------------------------------------------
-    def http_request(self, method, url, data=None):
+    def http_request(self, method, url):
         headers = {'Authorization' : 'Basic ' + base64.b64encode(self.admin_user + ':' + self.admin_password)}
+        if method == 'POST' and self.force == 'yes':
+            fields = [('force', 'true')]
+            data = urllib.urlencode(fields)
+            headers['Content-type'] = 'application/x-www-form-urlencoded'
+        else:
+            data = None
         conn = httplib.HTTPConnection(self.host + ':' + self.port)
         try:
             conn.request(method, url, data, headers)
@@ -290,6 +297,7 @@ def main():
             host           = dict(required=True),
             port           = dict(required=True),
             timeout        = dict(default=600),
+            force          = dict(default='no', choices=['yes', 'no']),
             ),
         supports_check_mode=True
         )
