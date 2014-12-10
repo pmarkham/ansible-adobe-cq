@@ -1,8 +1,4 @@
-# NOTE:
-
-If you are not viewing this under the Systems Engineering/ansible-cq5 repository, you are looking at a forked copy. Do **not** update it as it will be overwritten.
-
-# ansible-cq5
+# ansible-adobe-cq5
 
 Ansible module to automate configuration of Adobe CQ
 
