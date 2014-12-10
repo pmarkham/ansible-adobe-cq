@@ -11,6 +11,86 @@ import string
 import random
 
 
+DOCUMENTATION = '''
+---
+module: cquser
+short_description: Manage Adobe CQ users
+description:
+    - Create, modify and delete CQ users
+author: Paul Markham
+notes:
+    - The password specified is the initial password and is only used when the account is created.
+      If the account exists, the password isn't changed.
+options:
+    id:
+        description:
+            - The CQ user name
+        required: true
+    state:
+        description:
+            - Create or delete the account
+        required: true
+        choices: [present, absent]
+    first_name:
+        description:
+            - First name of user.
+              Only required when creating a new account.
+        required: true
+    last_name:
+        description:
+            - Last name of user.
+              Only required when creating a new account.
+        required: true
+    password:
+        description:
+            - Initial password when account is created. Not used if account already exists.
+              Only required when creating a new account.
+        required: true
+    groups:
+        description:
+            - The of groups the account is in.
+              Only required when creating a new account.
+        required: true
+        default: null
+    admin_user:
+        description:
+            - Adobe CQ admin user account name
+        required: true
+    admin_password:
+        description:
+            - Adobe CQ admin user account password
+        required: true
+    host:
+        description:
+            - Host name where Adobe CQ is running
+        required: true
+    port:
+        description:
+            - Port number that Adobe CQ is listening on
+        required: true
+'''
+
+EXAMPLES='''
+# Create a user
+- cquser: id=bbaggins
+          first_name=Bilbo
+          last_name=Baggins
+          password=myprecious
+          groups='immortality,invisibility'
+          host=auth01
+          port=4502
+          admin_user=admin
+          admin_password=admin
+          state=present
+
+# Delete a user
+- cquser: id=gollum
+          host=auth01
+          port=4502
+          admin_user=admin
+          admin_password=admin
+          state=absent
+'''
 # --------------------------------------------------------------------------------
 # CQUser class.
 # --------------------------------------------------------------------------------
@@ -73,14 +153,14 @@ class CQUser(object):
                     self.update_groups()
         else:
             # Create a new user
-            # Note: CQ doesn't seem to allow a user to be created without a password.
-            #       If one hasn't been specified, generate a random one.
             if not self.password:
-                self.generate_password()
+                self.module.fail_json(msg='Missing required argument: password')
             if not self.first_name:
                 self.module.fail_json(msg='Missing required argument: first_name')
             if not self.last_name:
                 self.module.fail_json(msg='Missing required argument: last_name')
+            if not self.groups:
+                self.module.fail_json(msg='Missing required argument: groups')
             self.create_user()
 
     # --------------------------------------------------------------------------------
@@ -171,16 +251,6 @@ class CQUser(object):
         resp = conn.getresponse()
         output = resp.read()
         return (resp.status, output)
-
-    # --------------------------------------------------------------------------------
-    # Generate a random password 
-    # --------------------------------------------------------------------------------
-    def generate_password(self):
-        chars = string.ascii_letters + string.digits + '!@#$%^&*()-_=+.,:;|?'
-        self.password = ''
-        for i in range(0,12):
-            self.password += random.choice(chars)
-        self.msg.append("generated password '%s'" % self.password)
 
     # --------------------------------------------------------------------------------
     # Return status and msg to Ansible.

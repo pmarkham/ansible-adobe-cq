@@ -1,8 +1,10 @@
-# ansible-adobe-cq
+# NOTE:
 
+If you are not viewing this under the Systems Engineering/ansible-cq5 repository, you are looking at a forked copy. Do **not** update it as it will be overwritten.
+
+# ansible-cq5
 
 Ansible module to automate configuration of Adobe CQ
-
 
 ## cqagent
 
@@ -14,7 +16,7 @@ Create a basic group. This module doesn't handle access control lists so it's no
 
 ## cqpassword
 
-Change user's password. 
+Change a user's password. Usually used to change the admin password from the default of 'admin'
 
 ## cqpkg
 
@@ -24,12 +26,10 @@ Manage CQ packages
 
 Create and modify users
 
-
 ## cqbundle
 
-Stop/start bundles
-
+Enable and disable bundles
 
 ## cqservice
 
-Stop/start CQ instance
+Start and stop CQ instances

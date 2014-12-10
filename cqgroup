@@ -8,6 +8,75 @@ import urllib
 import base64
 import json
 
+DOCUMENTATION = '''
+---
+module: cqgroup
+short_description: Manage Adobe CQ groups
+description:
+    - Create, modify and delete CQ groups
+author: Paul Markham
+notes:  
+        - This module only does basic group management. It doesn't handle access control lists so it's not that useful.
+          It's more to create groups that contain other groups, e.g. a 'sysadmin' group is in the administrator group;
+          'developers' are in the 'readonly' group.
+options:
+    id:
+        description:
+            - The CQ group ID
+        required: true
+    state:
+        description:
+            - Create or delete the group
+        required: true
+        choices: [present, absent]
+    name:
+        description:
+            - Descriptive name of group.
+              Only required when creating a new account.
+        required: true
+    groups:
+        description:
+            - The of groups the account is in.
+              Only required when creating a new account.
+        required: true
+        default: null
+    admin_user:
+        description:
+            - Adobe CQ admin user account name
+        required: true
+    admin_password:
+        description:
+            - Adobe CQ admin user account password
+        required: true
+    host:
+        description:
+            - Host name where Adobe CQ is running
+        required: true
+    port:
+        description:
+            - Port number that Adobe CQ is listening on
+        required: true
+'''
+
+EXAMPLES='''
+# Create a group
+- cqgroup: id=sysadmin
+           name='Systems Administrators'
+           groups='administrators'
+           host=auth01
+           port=4502
+           admin_user=admin
+           admin_password=admin
+           state=present
+
+# Delete a group
+- cqgroup: id=devs
+           host=auth01
+           port=4502
+           admin_user=admin
+           admin_password=admin
+           state=absent
+'''
 
 # --------------------------------------------------------------------------------
 # CQGroup class.
@@ -58,8 +127,8 @@ class CQGroup(object):
             if self.groups:
                 self.curr_groups.sort()
                 self.groups.sort()
-                curr_groups = ','.join(self.curr_groups)
-                groups = ','.join(self.groups)
+                curr_groups = ','.join(self.curr_groups).lower()
+                groups = ','.join(self.groups).lower()
                 if curr_groups != groups:
                     self.update_groups()
         else:

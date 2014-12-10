@@ -11,6 +11,59 @@ import string
 import random
 import HTMLParser
 
+DOCUMENTATION = '''
+---
+module: cqbundle
+short_description: Manage Adobe CQ Bundles
+description:
+    - Enable and disable CQ bundles
+author: Paul Markham
+notes: []
+options:
+    name:
+        description:
+            - The name of the bundle
+        required: true
+    state:
+        description:
+            - Enable or disable the bundle
+        required: true
+        choices: [enabled, disabled]
+    admin_user:
+        description:
+            - Adobe CQ admin user account name
+        required: true
+    admin_password:
+        description:
+            - Adobe CQ admin user account password
+        required: true
+    host:
+        description:
+            - Host name where Adobe CQ is running
+        required: true
+    port:
+        description:
+            - Port number that Adobe CQ is listening on
+        required: true
+'''
+
+EXAMPLES='''
+# Enable CQ bundle
+- cqbundle: name=com.day.crx.crxde-support
+            state=enabled
+            admin_user=admin
+            admin_password=admin
+            host=auth01
+            port=4502
+
+# Disable CQ bundle
+- cqbundle: name=com.day.crx.crxde-support
+            state=disabled
+            admin_user=admin
+            admin_password=admin
+            host=auth01
+            port=4502
+'''
 
 # --------------------------------------------------------------------------------
 # CQBundle class.

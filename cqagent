@@ -11,6 +11,139 @@ import string
 import random
 import HTMLParser
 
+DOCUMENTATION = '''
+---
+module: cqagent
+short_description: Manage Adobe CQ agents
+description:
+    - Manage Adobe CQ replication and flush agents.
+author: Paul Markham
+notes: []
+options:
+    state:
+        description:
+            - State of agent
+        required: true
+        choices: [present, absent, enabled, disabled, password]
+    name:
+        description:
+            - agent name
+        required: true
+        folder:
+        description:
+            - Folder containing agents. Usually 'agents.author' or 'agents.publish'.
+        required: true
+    title:
+        description:
+            - Agent title
+        required: false
+        default: null
+    transport_uri:
+        description:
+            - Transport URI
+        required: false
+        default: null
+    transport_user:
+        description:
+            - Transport user name
+        required: false
+        default: null
+    transport_password:
+        description:
+            - Password for transport_user
+        required: false
+        default: null
+    agent_user:
+        description:
+            - Agent user name
+        required: false
+        default: null
+    template:
+        description:
+            - agent template
+        required: false
+        default: /libs/cq/replication/templates/agent
+    resource_type:
+        description:
+            - resource type
+        required: false
+        default: /libs/cq/replication/components/agent
+    retry_delay:
+        description:
+            - retry delay, in milliseconds.
+        required: false
+        default: 60000
+    triggers:
+        description:
+            - list of triggers. Valid values are no_status_update, no_versioning, on_distribute, triggerDistribute,
+              on_modification, triggerModified, on_off_time, on_receive, ignore_default
+        required: false
+        default: null
+    log_level:
+        description:
+            - Logging level.
+        required: false
+        default: info
+    serialization_type:
+        description:
+            - Serialization type
+        required: false
+        default: durbo
+    headers:
+        description:
+            - List of additional headers. Note these should be HTML encoded if you use any special characters, e.g. quotes should
+              be specified as &quot;
+        required: false
+        default: durbo
+    connection_close:
+        description:
+            - Connection close
+        required: false
+        default: false
+        choices: [true, false]        
+    connection_timeout:
+        description:
+            - Connection timeout
+        required: false
+        default: null      
+    protocol_version:
+        description:
+            - Protocol version
+        required: false
+        default: null      
+    admin_user:
+        description:
+            - Adobe CQ admin user account name
+        required: true
+    admin_password:
+        description:
+            - Adobe CQ admin user account password
+        required: true    
+    host:
+        description:
+            - Host name where Adobe CQ is running
+        required: true
+    port:
+        description:
+            - Port number that Adobe CQ is listening on
+        required: true
+'''
+
+EXAMPLES='''
+# Create agent
+- cqagent: name=repl_publish
+           state=present
+           title='replication agent for publish instance'
+           folder='agent.author'
+           transport_uri='http://publ01:4503/bin/receive?sling:authRequestLogin=1'
+           transport_user=admin
+           transport_password=admin
+           triggers='on_receive,no_versioning'
+           admin_user=admin
+           admin_password=admin
+           host=auth01
+           port=4502
+'''
 
 # --------------------------------------------------------------------------------
 # CQAgent class.

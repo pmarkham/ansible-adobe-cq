@@ -17,6 +17,83 @@ import json
 import time
 import xml.etree.ElementTree as ET
 
+DOCUMENTATION = '''
+---
+module: cqpkg
+short_description: Manage Adobe CQ Packages
+description:
+    - Upload, install, uninstall and delete CQ packages
+author: Paul Markham
+notes:
+    - At the moment, this module assumes that the files are available on the local machine to upload. An enhancement would be
+      to get them from a binary repository or web server if they're needed.
+    - The package installation is done in the background and while it's happening, CQ often returns errors if you issue
+      any http calls to it. This makes it difficult to determine when a package is finished installing. This module catches
+      errors and retries in an attempt to determine when the package is installed, however, occasionally it still fails.
+      If this happens, re-running the module and it'll work.
+options:
+    name:
+        description:
+            - The name of the package
+        required: true
+        path:
+        description:
+            - Path to the file. Either a directory name, in which case it's assumed the file name matches the package name,
+              or a file name if the  package name doesn't match the file name.
+        required: true
+    state:
+        description:
+            - State of the package
+        required: true
+        choices: [present, absent, uploaded, uninstalled]
+    admin_user:
+        description:
+            - Adobe CQ admin user account name
+        required: true
+    admin_password:
+        description:
+            - Adobe CQ admin user account password
+        required: true
+    host:
+        description:
+            - Host name where Adobe CQ is running
+        required: true
+    port:
+        description:
+            - Port number that Adobe CQ is listening on
+        required: true
+    timeout:
+        description:
+            - Maximum time, in seconds, to wait for package to be installed.
+        required: false
+        default: 600
+    force:
+        description:
+            - Force the packages to be uploaded and installed, even if it's already there. Note that using this is non-idempotent.
+        required: false
+        default: false
+'''
+
+EXAMPLES='''
+# Upload and install package where the file name and package name are the same
+- cqpkg: name=cq-5.6.1-hotfix-3707-1.0.0.zip
+         path=/var/packages
+         state=present
+         admin_user=admin
+         admin_password=admin
+         host=auth01
+         port=4502
+
+# Upload and install a package where the file name and package name are different
+- cqpkg: name=acs-aem-commons-content-1.6.2.zip
+         path=/var/package/acs-aem-commons-content-1.6.2-min.zip
+         state=present
+         admin_user=admin
+         admin_password=admin
+         host=auth01
+         port=4502
+'''
+
 # --------------------------------------------------------------------------------
 # Helper function to walk the package list tree and extra info.
 # --------------------------------------------------------------------------------

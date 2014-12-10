@@ -11,6 +11,68 @@ import socket
 import re
 import time
 
+DOCUMENTATION = '''
+---
+module: cqservice
+short_description: Manage Adobe CQ Instances
+description:
+    - Start and stop CQ instances
+author: Paul Markham
+notes:  
+        - When starting a CQ instance, this module waits for it to be fully up before returning. It does this by retrieving the
+          specified URI and searching for a matching pattern. Author and publish instances may need a different URI specified
+          if the default login page has been changed. Note that the page checked must be retrievable without having to login to
+          CQ.
+options:
+    state:
+        description:
+            - Stop or start the instance
+        required: true
+        choices: [started, stopped]
+    uri:
+        description:
+            - The URI of the page to fetch to check if CQ has started.
+              Only required when starting CQ.
+        required: true
+    pattern:
+        description:
+            - The pattern to look for in the retrieved URI to check if CQ has started.
+              Only required when starting CQ.
+        required: true
+    cmd:
+        description:
+            - The command used to start or stop CQ.
+        required: false
+        default: service adobecq start, service adobecq stop
+    host:
+        description:
+            - Host name where Adobe CQ is running
+        required: true
+    port:
+        description:
+            - Port number that Adobe CQ is listening on
+        required: true
+    timeout:
+        description:
+            - Maximum time, in seconds, to wait for CQ to start or stop. The module exits with an error if this is exceeded.
+        required: false
+        default: 600
+'''
+
+EXAMPLES='''
+# Start CQ
+- cqservice: state=started
+             uri='/libs/granite/core/content/login.html'
+             pattern='<title>AEM Sign In</title>'
+             host=auth01
+             port=4502
+
+# Stop CQ
+- cqservice: state=stopped
+             host=auth01
+             port=4502
+'''
+
 # --------------------------------------------------------------------------------
 # CQService class.
 # --------------------------------------------------------------------------------
@@ -21,8 +83,6 @@ class CQService(object):
         self.uri            = self.module.params['uri']
         self.pattern        = self.module.params['pattern']
         self.cmd            = self.module.params['cmd']
-        self.admin_user     = self.module.params['admin_user']
-        self.admin_password = self.module.params['admin_password']
         self.host           = self.module.params['host']
         self.port           = self.module.params['port']
         self.timeout        = self.module.params['timeout']
@@ -145,7 +205,6 @@ class CQService(object):
     # Issue http request.
     # --------------------------------------------------------------------------------
     def http_request(self, method, url, fields = None):
-        headers = {'Authorization' : 'Basic ' + base64.b64encode(self.admin_user + ':' + self.admin_password)}
         if fields:
             data = urllib.urlencode(fields)
             headers['Content-type'] = 'application/x-www-form-urlencoded'
@@ -178,8 +237,6 @@ def main():
             uri            = dict(required=False),
             pattern        = dict(default=None),
             cmd            = dict(default=None),
-            admin_user     = dict(required=True),
-            admin_password = dict(required=True),
             verbose        = dict(default='no', choices=['yes', 'no']),
             host           = dict(required=True),
             port           = dict(required=True),
