@@ -1,3 +1,9 @@
+# Note 
+This code has been update and restructured for AEM6, although it should work on AEM 5.6.
+See repos:
+- https://github.com/pmarkham/ansible-adobe-aem for modules and roles
+- https://github.com/pmarkham/ansible-adobe-aem-sample for sample playbooks and inventory
+
 # ansible-adobe-cq5
 
 Ansible module to automate configuration of Adobe CQ
